@@ -137,7 +137,7 @@
             ]
         }
     },
-    "designserverALBListener": {
+    "nodejsALBListener": {
         "Type": "AWS::ElasticLoadBalancingV2::Listener",
         "Properties": {
             "DefaultActions": [
