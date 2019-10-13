@@ -1,0 +1,15 @@
+version: 0.0 
+os: linux 
+ 
+files: 
+  - source: / 
+    destination: /root
+hooks: 
+  BeforeInstall: 
+    - location: scripts/nodejs_install.sh
+      timeout: 300
+      runas: root
+  ApplicationStart:
+    - location: scripts/application_start.sh
+      timeout: 300
+      runas: root
