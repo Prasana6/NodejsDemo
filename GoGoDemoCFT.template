@@ -1,0 +1,572 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "NodeJsApplication",
+    "Parameters": {
+        "KeyName": {
+            "Description": "Optional key pair of the ec2-user to establish a SSH connection to the web server.",
+            "Type": "String",
+            "Default": ""
+        },
+        "InstanceType": {
+            "Description": "The instance type of web servers (e.g. t2.micro).",
+            "Type": "String",
+            "Default": "t2.micro"
+        },
+        "AMIID": {
+            "Description": "Golden Image ID",
+            "Type": "String",
+            "Default": ""
+        },
+        "ASGMin": {
+            "Description": "Minimum Instance Required",
+            "Type": "Number",
+            "Default": "0"
+        },
+        "ASGMax": {
+            "Description": "Maximum instances Required",
+            "Type": "Number",
+            "Default": "0"
+        },
+        "DesiredCapacity": {
+            "Description": "Desired instances Required",
+            "Type": "Number",
+            "Default": "0"
+        },
+        "VPCID": {
+            "Description": "Provide the VPC ID",
+            "Type": "String"
+        },
+        "RepoName": {
+            "Description": "Code Commit Repo Name",
+            "Type": "String"
+        },
+        "ArtifactsLocation": {
+            "Description": "Artifacts Location",
+            "Type": "String"
+        },
+        "BuildRoleARN": {
+            "Description": "Service Role ARN For Build Project",
+            "Type": "String"
+        },
+        "DeploymentGroupRoleARN": {
+          "Description": "Service Role ARN For Deployment Group",
+          "Type": "String"
+        },
+        "PipelineRoleARN": {
+          "Description": "IAM Role ARN for CodePipeline",
+          "Type": "String"
+        }
+    },
+    "Resources": {
+        "nodejsALBTarget": {
+            "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+            "Properties": {
+                "HealthCheckIntervalSeconds": "30",
+                "HealthCheckPath": "/",
+                "HealthCheckPort": "8000",
+                "HealthCheckProtocol": "HTTP",
+                "HealthCheckTimeoutSeconds": "5",
+                "HealthyThresholdCount": "5",
+                "Name": "nodejsALBTarget",
+                "Matcher": {
+                    "HttpCode": "200"
+                },
+                "Port": "8000",
+                "Protocol": "HTTP",
+                "Tags": [
+                    {
+                      "Key": "Name",
+                      "Value": "NodejsALBTG"
+                    }
+                ],
+                "TargetGroupAttributes": [
+                    {
+                        "Key": "deregistration_delay.timeout_seconds",
+                        "Value": "300"
+                    },
+                    {
+                        "Key": "stickiness.enabled",
+                        "Value": "false"
+                    },
+                    {
+                        "Key": "stickiness.type",
+                        "Value": "lb_cookie"
+                    },
+                    {
+                        "Key": "stickiness.lb_cookie.duration_seconds",
+                        "Value": "86400"
+                    }
+                ],
+                "UnhealthyThresholdCount": "2",
+                "VpcId": {
+                    "Ref": "VPCID"
+                }
+        }
+    },
+    "nodejsALB": {
+        "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "Properties": {
+            "LoadBalancerAttributes": [
+                {
+                    "Key": "access_logs.s3.enabled",
+                    "Value": "false"
+                },
+                {
+                    "Key": "deletion_protection.enabled",
+                    "Value": "false"
+                },
+                {
+                    "Key": "idle_timeout.timeout_seconds",
+                    "Value": "60"
+                }
+            ],
+            "Scheme": "internet-facing",
+            "Name": "nodejsALB",
+            "SecurityGroups": [
+                "sg-0448357399f6a0968"
+            ],
+            "Subnets": [
+                "subnet-a7e3708b",
+                "subnet-e6686bda"
+            ],
+            "Tags": [
+                {
+                    "Key": "Name",
+                    "Value": "NodejsALB"
+                }
+            ]
+        }
+    },
+    "designserverALBListener": {
+        "Type": "AWS::ElasticLoadBalancingV2::Listener",
+        "Properties": {
+            "DefaultActions": [
+                {
+                    "TargetGroupArn": {
+                        "Ref": "nodejsALBTarget"
+                    },
+                    "Type": "forward"
+                }
+            ],
+            "LoadBalancerArn": {
+                "Ref": "nodejsALB"
+            },
+            "Port": "80",
+            "Protocol": "HTTP"
+        }
+    },
+    "nodejslaunchconfig": {
+        "Type": "AWS::AutoScaling::LaunchConfiguration",
+        "Properties": {
+            "AssociatePublicIpAddress": true,
+            "IamInstanceProfile": "CodeDeployDemo-EC2-Instance-Profile-role",
+            "ImageId": {
+                "Ref": "AMIID"
+            },
+            "InstanceType": {
+                "Ref": "InstanceType"
+            },
+            "UserData": {
+                "Fn::Base64": {
+                    "Fn::Sub": "#!/bin/bash -xe\nsudo yum update -y\nsudo yum install ruby -y\ncd /home/ec2-user\nwget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install\nchmod +x ./install\nsudo ./install auto\n"
+                  }
+            },
+            "KeyName": {
+                "Ref": "KeyName"
+            },
+            "SecurityGroups": [
+              "sg-0448357399f6a0968"
+            ]
+        }
+    },
+    "nodejserverasg": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+          "TargetGroupARNs": [
+              {
+                  "Ref": "nodejsALBTarget"
+              }
+          ],
+          "LaunchConfigurationName": {
+              "Ref": "nodejslaunchconfig"
+          },
+          "MinSize": {
+              "Ref": "ASGMin"
+          },
+          "MaxSize": {
+              "Ref": "ASGMax"
+          },
+          "DesiredCapacity": {
+              "Ref": "DesiredCapacity"
+          },
+          "Cooldown": 60,
+          "HealthCheckGracePeriod": 700,
+          "HealthCheckType": "EC2",
+          "VPCZoneIdentifier": [
+              "subnet-a7e3708b",
+              "subnet-e6686bda"
+          ],
+          "Tags": [
+              {
+                  "Key": "Name",
+                  "Value": "NodejsHelloWorld",
+                  "PropagateAtLaunch": "True"
+              }
+          ]
+       }
+    },
+    "ScalingUpPolicy": {
+        "Type": "AWS::AutoScaling::ScalingPolicy",
+        "Properties": {
+            "AdjustmentType": "PercentChangeInCapacity",
+            "MinAdjustmentStep": 1,
+            "AutoScalingGroupName": {
+                "Ref": "nodejserverasg"
+            },
+            "Cooldown": 900,
+            "ScalingAdjustment": 25
+        }
+    },
+    "CPUHighAlarm": {
+        "Type": "AWS::CloudWatch::Alarm",
+            "Properties":
+            {
+                "EvaluationPeriods": 5,
+                "Statistic": "Average",
+                "Threshold": 75,
+                "AlarmDescription": "Alarm if CPU load is high.",
+                "Period": 60,
+                "AlarmActions":
+                  [
+                      {
+                          "Ref": "ScalingUpPolicy"
+                      }
+                  ],
+                "Namespace": "AWS/EC2",
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "nodejserverasg"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanThreshold",
+                "MetricName": "CPUUtilization"
+            }
+    },
+		"UnhealthyHostAlarm": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "EvaluationPeriods": 1,
+                "Statistic": "Average",
+                "Threshold": 1,
+                "AlarmDescription": "Alarm if CPU there are unhealhy host.",
+                "Period": 300,
+                "AlarmActions": [
+                    {
+                        "Ref": "ScalingUpPolicy"
+                    }
+                ],
+                "Namespace": "AWS/EC2",
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "nodejserverasg"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+                "MetricName": "UnHealthyHostCount"
+            }
+        },
+        "ScalingDownPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "PercentChangeInCapacity",
+                "MinAdjustmentStep": 1,
+                "AutoScalingGroupName": {
+                    "Ref": "nodejserverasg"
+                },
+                "Cooldown": 300,
+                "ScalingAdjustment": -25
+            }
+        },
+        "CPULowAlarm": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "EvaluationPeriods": 15,
+                "Statistic": "Average",
+                "Threshold": 25,
+                "AlarmDescription": "Alarm if CPU load is low.",
+                "Period": 60,
+                "AlarmActions": [
+                    {
+                        "Ref": "ScalingDownPolicy"
+                    }
+                ],
+                "Namespace": "AWS/EC2",
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "nodejserverasg"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "LessThanThreshold",
+                "MetricName": "CPUUtilization"
+            }
+
+        },
+        "NodejsRepository": {
+            "Type": "AWS::CodeCommit::Repository",
+            "Properties": {
+                "RepositoryDescription": "Repository for NodeJs HelloWorld Application",
+                "RepositoryName": {
+                    "Ref": "RepoName"
+                }
+            }
+        },
+        "NodejsBuild": {
+            "Type": "AWS::CodeBuild::Project",
+            "Properties": {
+                "Artifacts": {
+                    "ArtifactIdentifier": "String",
+                    "EncryptionDisabled": false,
+                    "Location": {
+                        "Ref": "ArtifactsLocation"
+                    },
+                    "Packaging": "NONE",
+                    "Type": "S3"
+                },
+                "Description": "Buidl Nodejs Hello Work Application",
+                "Environment": {
+                    "ComputeType": "BUILD_GENERAL1_SMALL",
+                    "Image": "aws/codebuild/standard:2.0",
+                    "Type": "LINUX_CONTAINER"
+                },
+                "LogsConfig": {
+                    "CloudWatchLogs": {
+                        "Status": "ENABLED"
+                    }
+                },
+                "Name": "Nodejs-Build-CFT",
+                "ServiceRole": {
+                    "Ref": "BuildRoleARN"
+                },
+                "Source": {
+                    "Type": "CODECOMMIT",
+                    "Location": {
+                        "Fn::GetAtt": [
+                            "NodejsRepository",
+                            "CloneUrlHttp"
+                        ]
+                    }
+                },
+                "TimeoutInMinutes": 60
+            }
+        },
+        "NodejsDeploymentApplication": {
+            "Type": "AWS::CodeDeploy::Application",
+            "Properties": {
+                "ApplicationName": "NodejsHelloWorldApplication",
+                "ComputePlatform": "Server"
+            }
+        },
+        "NodejsDeploymentGroup": {
+            "DependsOn": "NodejsDeploymentApplication",
+            "Type": "AWS::CodeDeploy::DeploymentGroup",
+            "Properties": {
+                "ApplicationName": {
+                    "Ref": "NodejsDeploymentApplication"
+                },
+                "AutoScalingGroups": [
+                    {
+                        "Ref": "nodejserverasg"
+                    }
+                ],
+                "DeploymentStyle": {
+                    "DeploymentType": "IN_PLACE",
+                    "DeploymentOption": "WITHOUT_TRAFFIC_CONTROL"
+                },
+                "DeploymentGroupName": "NodejsDeploymentGroup",
+                "DeploymentConfigName": "CodeDeployDefault.AllAtOnce",
+                "ServiceRoleArn": {
+                    "Ref": "DeploymentGroupRoleARN"
+                }
+            }
+        },
+        "WebTierPipeline": {
+            "Type": "AWS::CodePipeline::Pipeline",
+            "Properties": {
+                "ArtifactStore": {
+                    "Location": "codepipeline-us-east-1-118795143554",
+                    "Type": "S3"
+                },
+                "Name": "Nodejsdemo-Pipeline-CFT",
+                "RoleArn": {
+                    "Ref": "PipelineRoleARN"
+                },
+                "Stages": [
+                    {
+                        "Name": "Source",
+                        "Actions": [
+                            {
+                                "Name": "Source",
+                                "ActionTypeId": {
+                                    "Category": "Source",
+                                    "Owner": "AWS",
+                                    "Version": 1,
+                                    "Provider": "CodeCommit"
+                                },
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "SourceArtifact"
+                                    }
+                                ],
+                                "Configuration": {
+                                    "RepositoryName": {
+                                        "Fn::GetAtt": [
+                                            "NodejsRepository",
+                                            "Name"
+                                        ]
+                                    },
+                                    "BranchName": "master"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "Build",
+                        "Actions": [
+                            {
+                                "Name": "Build",
+                                "ActionTypeId": {
+                                    "Category": "Build",
+                                    "Owner": "AWS",
+                                    "Version": 1,
+                                    "Provider": "CodeBuild"
+                                },
+                                "Region": "us-east-1",
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "SourceArtifact"
+                                    }
+                                ],
+                                "OutputArtifacts": [
+                                    {
+                                        "Name": "BuildArtifact"
+                                    }
+                                ],
+                                "Configuration": {
+                                    "ProjectName": {
+                                        "Ref": "NodejsBuild"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "StageDeployment",
+                        "Actions": [
+                            {
+                                "Name": "StageDeployment",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Version": 1,
+                                    "Provider": "CodeDeploy"
+                                },
+                                "Region": "us-east-1",
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuildArtifact"
+                                    }
+                                ],
+                                "Configuration": {
+                                    "ApplicationName": {
+                                        "Ref": "NodejsDeploymentApplication"
+                                    },
+                                    "DeploymentGroupName": {
+                                        "Ref": "NodejsDeploymentGroup"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "ApprovalforProdEnvironment",
+                        "Actions": [
+                            {
+                                "Name": "ApprovalforProdEnvironment",
+                                "ActionTypeId": {
+                                    "Category": "Approval",
+                                    "Owner": "AWS",
+                                    "Version": 1,
+                                    "Provider": "Manual"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "Name": "ProdDeployment",
+                        "Actions": [
+                            {
+                                "Name": "ProdDeployment",
+                                "ActionTypeId": {
+                                    "Category": "Deploy",
+                                    "Owner": "AWS",
+                                    "Version": 1,
+                                    "Provider": "CodeDeploy"
+                                },
+                                "Region": "us-east-1",
+                                "InputArtifacts": [
+                                    {
+                                        "Name": "BuildArtifact"
+                                    }
+                                ],
+                                "Configuration": {
+                                    "ApplicationName": {
+                                        "Ref": "NodejsDeploymentApplication"
+                                    },
+                                    "DeploymentGroupName": {
+                                        "Ref": "NodejsDeploymentGroup"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "RepoName": {
+            "Description": "Repository Name",
+            "Value": {
+                "Ref": "NodejsRepository"
+            },
+            "Export": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-Repo"
+                }
+            }
+        },
+        "NodejsALB": {
+            "Description": "DNS of Nodejs ALB",
+            "Value": {
+                "Fn::GetAtt": [
+                    "nodejsALB",
+                    "DNSName"
+                ]
+            },
+            "Export": {
+                "Name": {
+                    "Fn::Sub": "${AWS::StackName}-ALBDNS"
+                }
+            }
+        }
+    }
+}
